@@ -430,8 +430,9 @@ async function checkPass() {
     return;
   }
 
-  // ✓ Password correct — stash key, fade out passlock, start full scan
+  // ✓ Password correct — stash password + key, fade out passlock, start full scan
   _cryptoKey = key;
+  _password  = password;
   inp.disabled = false;
   const pl = document.getElementById('passlock');
   pl.style.transition = 'opacity .3s';
@@ -483,12 +484,22 @@ async function fetchRaw(url) {
   } catch { return null; }
 }
 
-// Fetch + decrypt an .enc file — returns plaintext ArrayBuffer or null
+// Store the raw password in memory (not just the derived key) so we can
+// re-derive a fresh key for each file's unique salt
+let _password = null;
+
+// Fetch + decrypt an .enc file — derives a fresh key from this file's salt
 async function fetchDecrypt(url) {
   const buf = await fetchRaw(url);
   if (!buf) return null;
-  try { return await decryptBuffer(buf, _cryptoKey); }
-  catch (e) { console.error('Decrypt failed:', url, e); return null; }
+  try {
+    const salt = new Uint8Array(buf).slice(0, SALT_LEN);
+    const key  = await deriveKey(_password, salt);
+    return await decryptBuffer(buf, key);
+  } catch (e) {
+    console.error('Decrypt failed:', url, e);
+    return null;
+  }
 }
 
 // ═══════════════════════════════════════════
