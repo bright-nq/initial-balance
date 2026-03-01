@@ -514,10 +514,13 @@ async function waitForArrow(timeoutMs = 10000) {
 // ─── Probe a single year — looks for .arrow.enc ───────────────────────────────
 async function probeYear(year) {
   const url = DATA_DIR + `nq_ohlcv_${year}.arrow.enc`;
-  const TIMEOUT = 4000;
+  const TIMEOUT = 6000;
   const attempt = async () => {
+    // Try HEAD first
     try { const r = await fetch(url, { method: 'HEAD' }); if (r.ok) return year; } catch (_) {}
+    // Partial GET fallback
     try { const r = await fetch(url, { headers: { Range: 'bytes=0-3' } }); if (r.ok || r.status === 206) return year; } catch (_) {}
+    // Full GET last resort
     try { const r = await fetch(url); if (r.ok) return year; } catch (_) {}
     return null;
   };
@@ -548,22 +551,38 @@ async function scanDataDir(resultsBuf) {
     return;
   }
 
-  // 2. Probe for OHLCV year files (looking for .enc versions)
+  // 2. Probe for OHLCV year files (.enc versions)
+  // First build the list of years that actually appear in the results data
   scanning.innerHTML = `Scanning for OHLCV year files…`;
-  const years = [];
-  for (let y = YEAR_RANGE[0]; y <= YEAR_RANGE[1]; y++) years.push(y);
+  const yearsInResults = [...new Set(rawTrades.map(r => +r.year))].filter(Boolean).sort();
+  // Probe those years first (most likely to exist), then fill in any gaps with YEAR_RANGE
+  const allYears = [...new Set([...yearsInResults,
+    ...Array.from({length: YEAR_RANGE[1] - YEAR_RANGE[0] + 1}, (_, i) => YEAR_RANGE[0] + i)
+  ])].sort();
 
   const found = [];
-  for (let i = 0; i < years.length; i += 4) {
-    const batch = years.slice(i, i + 4);
+  for (let i = 0; i < allYears.length; i += 4) {
+    const batch = allYears.slice(i, i + 4);
     const results = await Promise.all(batch.map(probeYear));
     results.forEach(y => { if (y !== null) found.push(y); });
     if (found.length > 0) scanning.innerHTML = `Found years: ${found.join(', ')} — still scanning…`;
   }
 
+  // 3. If probe found nothing but we know years exist from results, try a direct fetch test
+  if (found.length === 0 && yearsInResults.length > 0) {
+    scanning.innerHTML = `Probe inconclusive — trying direct fetch…`;
+    for (const y of yearsInResults) {
+      const url = DATA_DIR + `nq_ohlcv_${y}.arrow.enc`;
+      try {
+        const r = await fetch(url);
+        if (r.ok) found.push(y);
+      } catch (_) {}
+    }
+  }
+
   found.forEach(y => { allOhlcvFiles[y] = true; });
 
-  // 3. Show year picker
+  // 4. Show year picker
   scanning.style.display = 'none';
   document.getElementById('step-years').style.display = 'block';
 
@@ -1225,7 +1244,7 @@ function drawChart(cxX, cxY) {
 
 function drawNoData(ctx, W, H, t) {
   ctx.fillStyle='rgba(107,115,138,0.35)'; ctx.font='11px JetBrains Mono'; ctx.textAlign='center';
-  ctx.fillText(`No OHLCV data — load nq_ohlcv_${t.date.slice(0,4)}.arrow`, W/2, H/2-8);
+  ctx.fillText(`No OHLCV data — load nq_ohlcv_${t.date.slice(0,4)}.arrow.enc`, W/2, H/2-8);
   ctx.font='10px JetBrains Mono'; ctx.fillStyle='rgba(107,115,138,0.2)';
   ctx.fillText(`IB ${t._ib_range_pts.toFixed(1)}pt · ${t.minutes_to_break.toFixed(0)}min to ${t.first_break} break`, W/2, H/2+14);
   if (t._ib_high) {
